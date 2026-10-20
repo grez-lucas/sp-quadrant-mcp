@@ -41,11 +41,14 @@ through a proxy. Logs go to stderr; stdout is the MCP protocol.
 ## Install
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.0
+GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.1
 ```
 
-`go.mod`'s `toolchain go1.27.3` line only applies under `GOTOOLCHAIN=auto`, so this builds with
-go1.27.3 instead of an older local Go that still has GO-2026-6617, GO-2026-6613 and GO-2026-6612.
+`go install pkg@version` runs outside any main module, so `go.mod`'s `go 1.27.3` line is the only one
+it honours. Under `GOTOOLCHAIN=auto` an older local Go switches to go1.27.3 for the build; under
+`GOTOOLCHAIN=local` it refuses with `requires go >= 1.27.3` instead of building a binary that still has
+GO-2026-6617, GO-2026-6613 and GO-2026-6612. v0.1.0 named go1.27.3 only in a `toolchain` line, which
+`go install` ignores, so a v0.1.0 binary may have been built with an older Go: install v0.1.1.
 
 ## Register with Claude Code
 
@@ -75,10 +78,13 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 ```
 
 CI runs the same gates (`.github/workflows/ci.yml`), on the go1.27.3 that `actions/setup-go` reads
-from the `toolchain` line. `GOTOOLCHAIN=auto` makes a local run use go1.27.3 too: on an older Go,
-`govulncheck` reports the standard library vulnerabilities fixed in go1.27.2. golangci-lint is v2.14.0
-because v2.13.x cannot type-check against go1.27.2 or later (export data version 5); it runs through
-`go run` so the pinned version is the one used, whatever is installed globally.
+from the `go` line (it falls back to the `go` directive when there is no `toolchain` directive). A CI
+step also fails if `go.mod` gains a `toolchain` line or its `go` line falls below the Go CI ran, since
+the `go` line is what `go install` builds with. `GOTOOLCHAIN=auto` lets an older local Go switch to
+go1.27.3 for the gates; under `GOTOOLCHAIN=local` it refuses with `requires go >= 1.27.3`.
+golangci-lint is v2.14.0 because v2.13.x cannot type-check against go1.27.2 or later (export data
+version 5); it runs through `go run` so the pinned version is the one used, whatever is installed
+globally.
 
 The tests never reach a real SP: they run a real MCP client against the server over an in-memory
 transport, through the real REST adapter, against a stateful fake of SP v19.2.0's Local REST API
