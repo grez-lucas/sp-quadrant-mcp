@@ -16,17 +16,19 @@ all of it is [ADR-0001](../adr/0001-drive-sp-desktop-through-its-local-rest-api-
   That creates the `EM_URGENT` and `EM_IMPORTANT` tag entities. Until then `create_task` and
   `move_task` refuse, and `list_tasks` lists without quadrants. Once pressed, the tags sync to every
   device on the account.
-- **Go** 1.27.0 or later. The install fetches go1.27.3 itself (below).
+- **Go** 1.27.0 or later. With `GOTOOLCHAIN=auto` the install switches to go1.27.3 itself (below).
 
 ## Install
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.0
+GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.1
 ```
 
-`go.mod`'s `toolchain go1.27.3` line only applies under `GOTOOLCHAIN=auto`; with the laptop's
-`GOTOOLCHAIN=local` the binary would be built with go1.27.0, which has GO-2026-6617, GO-2026-6613 and
-GO-2026-6612 in `net/http`. The binary lands in `$(go env GOPATH)/bin/sp-quadrant-mcp`.
+`go install pkg@version` runs outside any main module, so `go.mod`'s `go 1.27.3` line is the only one
+it honours. With the laptop's `GOTOOLCHAIN=local` and a Go older than go1.27.3, it refuses with
+`requires go >= 1.27.3` rather than build a binary with GO-2026-6617, GO-2026-6613 and GO-2026-6612 in
+`net/http`; `GOTOOLCHAIN=auto` lets it switch to go1.27.3 instead. The binary lands in
+`$(go env GOPATH)/bin/sp-quadrant-mcp`.
 
 ## Register
 
@@ -48,9 +50,9 @@ go version -m "$(go env GOPATH)/bin/sp-quadrant-mcp" | head -3
 ```
 
 The first line must end in `go1.27.3` (or later), and the third (`mod`) must show
-`github.com/grez-lucas/sp-quadrant-mcp` at the tag installed (`v0.1.0`); the second (`path`) only names
-the package. A `go1.27.0` on the first line means it was installed without `GOTOOLCHAIN=auto`: install it
-again as above.
+`github.com/grez-lucas/sp-quadrant-mcp` at the tag installed (`v0.1.1`); the second (`path`) only names
+the package. A Go older than go1.27.3 on the first line means the binary is v0.1.0, whose `go.mod` named
+go1.27.3 only in a `toolchain` line that `go install` ignores: install v0.1.1 as above.
 
 Check the registration:
 
@@ -113,9 +115,10 @@ overwritten, and the move's read-back check cannot see it because it was never p
 GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@vX.Y.Z
 ```
 
-`GOTOOLCHAIN=auto` for the same reason as the install: it builds with the Go the tag's `toolchain` line
-names. Check it with the `go version -m` step under Verify, then restart Claude Code. The registration
-points at the binary path, which does not change, so it needs no update.
+`GOTOOLCHAIN=auto` for the same reason as the install: an older local Go switches to the Go the tag's
+`go` line names, where `GOTOOLCHAIN=local` would refuse. Check it with the `go version -m` step under
+Verify, then restart Claude Code. The registration points at the binary path, which does not change, so
+it needs no update.
 
 ## After an SP update
 

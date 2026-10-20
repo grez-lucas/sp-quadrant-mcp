@@ -23,6 +23,21 @@ jobs:
       - name: go version
         run: go version
 
+      # go install pkg@version ignores go.mod's toolchain line and honours only
+      # the go line, so the go line must name the patched Go this job vets.
+      - name: go line pins the patched toolchain
+        run: |
+          if grep -Eq '^[[:space:]]*toolchain[[:space:]]' go.mod; then
+            echo "go.mod has a toolchain line; go install pkg@version ignores it, raise the go line instead" >&2
+            exit 1
+          fi
+          line="go$(go list -m -f '{{.GoVersion}}')"
+          ran="$(go env GOVERSION)"
+          if [ "$line" != "$ran" ] && [ "$(printf '%s\n' "$line" "$ran" | sort -V | head -n1)" = "$line" ]; then
+            echo "go.mod's go line ($line) is below the Go CI ran ($ran)" >&2
+            exit 1
+          fi
+
       - name: go mod tidy -diff
         run: go mod tidy -diff
 
