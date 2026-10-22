@@ -25,7 +25,16 @@ _Avoid_: re-tag, reprioritise
 **Complete**:
 Mark a task done. A completed task stays in its quadrant until archived.
 
+**Notes**:
+A task's markdown notes field in SP: the context that does not fit the title.
+_Avoid_: description, body
+
+**Checklist**:
+The `- [ ] ` items in a task's **Notes**, one per line. Not subtasks.
+_Avoid_: subtasks, steps
+
 ## Relationships
 
 - A **Task** is in exactly one **Quadrant** at a time.
+- A **Task** has at most one **Notes** field, and a **Checklist** lives inside it.
 - A **Quadrant** exists only once both the `EM_URGENT` and `EM_IMPORTANT` tags exist in the sync account.

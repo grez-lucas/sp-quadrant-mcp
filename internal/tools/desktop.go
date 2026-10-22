@@ -51,6 +51,8 @@ type Task struct {
 	TagIDs    []string
 	ProjectID string
 	ParentID  string
+	// Notes is SP's markdown notes field, empty when the task has none.
+	Notes string
 }
 
 // IsSubtask reports whether t is a subtask, which never appears on the board.
@@ -69,6 +71,8 @@ type NewTask struct {
 	Title     string
 	ProjectID string
 	TagIDs    []string
+	// Notes is sent only when non-empty.
+	Notes string
 }
 
 // TaskChanges is a partial update to a task.
@@ -78,6 +82,8 @@ type TaskChanges struct {
 	TagIDs []string
 	// Done sets the task's done flag when non-nil.
 	Done *bool
+	// Notes replaces the task's whole notes field when non-nil.
+	Notes *string
 }
 
 // Errors a Desktop reports, which the tools turn into messages for the user.

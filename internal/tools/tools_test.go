@@ -140,6 +140,7 @@ func TestToolsAreRegisteredWithTheirInputs(t *testing.T) {
 		"create_task":   {"important", "title", "urgent"},
 		"move_task":     {"important", "task_id", "urgent"},
 		"complete_task": {"task_id"},
+		"add_notes":     {"task_id", "text"},
 	}
 	if len(required) != len(want) {
 		t.Fatalf("tools = %v, want exactly %v", required, want)
@@ -304,6 +305,154 @@ func TestCreateTaskFailsWhenSPDoesNotKeepTheQuadrant(t *testing.T) {
 	res := call(t, s, "create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": false})
 
 	wantError(t, res, "Urgent, not important", "Neither")
+}
+
+func TestCreateTaskStoresTheNotesLiterally(t *testing.T) {
+	fake := sptest.New(t, token)
+	fake.AddQuadrantTags()
+	s := connect(t, fake, token)
+	const notes = "Ana has the PO #finance 30m\n\n- [ ] Ask for the invoice\n- [ ] File it"
+
+	res := call(t, s, "create_task", map[string]any{"title": "Renew domain", "urgent": false, "important": true,
+		"notes": "\n" + notes + "\n\n"})
+
+	got, _ := decode[tools.TaskView](t, res)
+	want := tools.TaskView{ID: got.ID, Title: "Renew domain", Notes: notes, Urgent: ptr(false), Important: ptr(true), Quadrant: "Not urgent, important"}
+	if !equalView(got, want) {
+		t.Fatalf("result = %s, want %s", show(got), show(want))
+	}
+	stored, _ := fake.Task(got.ID)
+	if stored.Notes != notes || !slices.Equal(stored.TagIDs, []string{"EM_IMPORTANT"}) {
+		t.Fatalf("SP holds notes %q tags %v, want %q and only EM_IMPORTANT", stored.Notes, stored.TagIDs, notes)
+	}
+}
+
+func TestCreateTaskWithoutNotesLeavesThemEmpty(t *testing.T) {
+	fake := sptest.New(t, token)
+	fake.AddQuadrantTags()
+	s := connect(t, fake, token)
+
+	got, raw := decode[tools.TaskView](t, call(t, s, "create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": true}))
+
+	if stored, _ := fake.Task(got.ID); stored.Notes != "" {
+		t.Fatalf("SP holds notes %q, want none", stored.Notes)
+	}
+	if _, ok := raw["notes"]; ok {
+		t.Fatalf("result has notes although the task has none: %v", raw)
+	}
+}
+
+func TestCreateTaskFailsWhenSPDoesNotKeepTheNotes(t *testing.T) {
+	fake := sptest.New(t, token)
+	fake.AddQuadrantTags()
+	fake.OnWrite(func(task *sptest.Task) { task.Notes = "" })
+	s := connect(t, fake, token)
+
+	res := call(t, s, "create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": true, "notes": "- [ ] Transfer"})
+
+	wantError(t, res, "notes", "check it in SP")
+}
+
+func TestAddNotesAppendsToTheTasksNotes(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing string
+		text     string
+		want     string
+	}{
+		{"to a task without notes", "", "Ana has the PO number", "Ana has the PO number"},
+		{"after a paragraph", "Context: the renewal", "- [ ] Ask for the invoice", "Context: the renewal\n\n- [ ] Ask for the invoice"},
+		{"continuing a checklist", "Context\n\n- [ ] One\n", "- [ ] Two", "Context\n\n- [ ] One\n- [ ] Two"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := sptest.New(t, token)
+			fake.AddQuadrantTags()
+			id := fake.AddTask(sptest.Task{Title: "Renew domain", Notes: c.existing, TagIDs: []string{"EM_URGENT", "work"}})
+			s := connect(t, fake, token)
+
+			res := call(t, s, "add_notes", map[string]any{"task_id": id, "text": c.text})
+
+			got, _ := decode[tools.TaskView](t, res)
+			want := tools.TaskView{ID: id, Title: "Renew domain", Notes: c.want, Urgent: ptr(true), Important: ptr(false), Quadrant: "Urgent, not important"}
+			if !equalView(got, want) {
+				t.Fatalf("result = %s, want %s", show(got), show(want))
+			}
+			stored, _ := fake.Task(id)
+			if stored.Notes != c.want || stored.Title != "Renew domain" || stored.IsDone ||
+				!slices.Equal(stored.TagIDs, []string{"EM_URGENT", "work"}) {
+				t.Fatalf("SP holds %+v, want notes %q and everything else unchanged", stored, c.want)
+			}
+		})
+	}
+}
+
+func TestListTasksShowsTheNotes(t *testing.T) {
+	fake := sptest.New(t, token)
+	fake.AddQuadrantTags()
+	id := fake.AddTask(sptest.Task{Title: "Renew domain", Notes: "- [ ] Pay"})
+	s := connect(t, fake, token)
+
+	got, _ := decode[tools.ListTasksOutput](t, call(t, s, "list_tasks", map[string]any{}))
+
+	if len(got.Tasks) != 1 || got.Tasks[0].ID != id || got.Tasks[0].Notes != "- [ ] Pay" {
+		t.Fatalf("list_tasks = %s, want task %s with its notes", show(got), id)
+	}
+}
+
+func TestAddNotesWorksWithoutTheQuadrantTags(t *testing.T) {
+	fake := sptest.New(t, token)
+	id := fake.AddTask(sptest.Task{Title: "Renew domain"})
+	s := connect(t, fake, token)
+
+	got, raw := decode[tools.TaskView](t, call(t, s, "add_notes", map[string]any{"task_id": id, "text": "- [ ] Pay"}))
+
+	if got.Notes != "- [ ] Pay" {
+		t.Fatalf("result notes = %q, want %q", got.Notes, "- [ ] Pay")
+	}
+	for _, k := range []string{"urgent", "important", "quadrant"} {
+		if _, ok := raw[k]; ok {
+			t.Fatalf("result has %q although the quadrant tags do not exist: %v", k, raw)
+		}
+	}
+}
+
+func TestAddNotesRejectsBlankText(t *testing.T) {
+	fake := sptest.New(t, token)
+	id := fake.AddTask(sptest.Task{Title: "Renew domain", Notes: "keep"})
+	s := connect(t, fake, token)
+
+	res := call(t, s, "add_notes", map[string]any{"task_id": id, "text": " \n\t "})
+
+	wantError(t, res, "text")
+	if stored, _ := fake.Task(id); stored.Notes != "keep" || writes(fake) != 0 {
+		t.Fatalf("blank text reached SP")
+	}
+}
+
+func TestAddNotesRefusesASubtask(t *testing.T) {
+	fake := sptest.New(t, token)
+	parent := fake.AddTask(sptest.Task{Title: "Trip"})
+	child := fake.AddTask(sptest.Task{Title: "Book train", ParentID: parent})
+	s := connect(t, fake, token)
+
+	res := call(t, s, "add_notes", map[string]any{"task_id": child, "text": "- [ ] Window seat"})
+
+	wantError(t, res, "not a Task: subtasks never appear on the board")
+	if writes(fake) != 0 {
+		t.Fatalf("a refused add_notes wrote to SP")
+	}
+}
+
+func TestAddNotesFailsWhenSPDoesNotKeepTheNotes(t *testing.T) {
+	fake := sptest.New(t, token)
+	id := fake.AddTask(sptest.Task{Title: "Renew domain", Notes: "old"})
+	fake.OnWrite(func(task *sptest.Task) { task.Notes = "old" })
+	s := connect(t, fake, token)
+
+	res := call(t, s, "add_notes", map[string]any{"task_id": id, "text": "- [ ] Pay"})
+
+	wantError(t, res, "notes", "check it in SP")
 }
 
 // ADR-0001 Verification: a move reads back the asked-for state and preserves
@@ -565,6 +714,7 @@ var everyCall = []struct {
 	{"create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": true}},
 	{"move_task", map[string]any{"task_id": "task-1", "urgent": true, "important": false}},
 	{"complete_task", map[string]any{"task_id": "task-1"}},
+	{"add_notes", map[string]any{"task_id": "task-1", "text": "- [ ] Pay"}},
 }
 
 func seeded(t *testing.T) *sptest.Fake {
@@ -686,6 +836,7 @@ func TestA5xxOnAWriteSaysTheChangeMayHaveLanded(t *testing.T) {
 		{"create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": true}},
 		{"move_task", map[string]any{"task_id": "task-1", "urgent": true, "important": false}},
 		{"complete_task", map[string]any{"task_id": "task-1"}},
+		{"add_notes", map[string]any{"task_id": "task-1", "text": "- [ ] Pay"}},
 	}
 	failures := []struct {
 		status int
@@ -720,6 +871,7 @@ func TestAFailedReadBackSaysTheChangeMayHaveLanded(t *testing.T) {
 		{"create_task", map[string]any{"title": "Pay rent", "urgent": true, "important": true}},
 		{"move_task", map[string]any{"task_id": "task-1", "urgent": true, "important": false}},
 		{"complete_task", map[string]any{"task_id": "task-1"}},
+		{"add_notes", map[string]any{"task_id": "task-1", "text": "- [ ] Pay"}},
 	} {
 		t.Run(w.tool, func(t *testing.T) {
 			fake := seeded(t)
@@ -774,7 +926,7 @@ func TestA5xxOnAReadDoesNotClaimAChange(t *testing.T) {
 
 func equalView(a, b tools.TaskView) bool {
 	eq := func(x, y *bool) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
-	return a.ID == b.ID && a.Title == b.Title && a.Done == b.Done && a.Quadrant == b.Quadrant &&
+	return a.ID == b.ID && a.Title == b.Title && a.Notes == b.Notes && a.Done == b.Done && a.Quadrant == b.Quadrant &&
 		eq(a.Urgent, b.Urgent) && eq(a.Important, b.Important)
 }
 

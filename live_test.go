@@ -295,14 +295,30 @@ func TestLiveTools(t *testing.T) {
 	}
 
 	const title = liveTitlePrefix + "tool create"
-	created, msg, isError := liveCall(t, session, "create_task", map[string]any{"title": title, "urgent": true, "important": false})
+	const notes = "SS13 live context #tag 30m\n\n- [ ] first step\n- [ ] second step"
+	created, msg, isError := liveCall(t, session, "create_task",
+		map[string]any{"title": title, "urgent": true, "important": false, "notes": notes})
 	sw.track(created.ID)
 	if isError {
 		t.Fatalf("create_task: %s", msg)
 	}
 	t.Logf("created %q (%s) in %q", created.Title, created.ID, created.Quadrant)
-	if created.Title != title || created.Quadrant != "Urgent, not important" {
+	if created.Title != title || created.Quadrant != "Urgent, not important" || created.Notes != notes {
 		t.Fatalf("create_task returned %+v", created)
+	}
+
+	const wantNotes = notes + "\n- [ ] third step"
+	noted, msg, isError := liveCall(t, session, "add_notes", map[string]any{"task_id": created.ID, "text": "- [ ] third step"})
+	if isError {
+		t.Fatalf("add_notes: %s", msg)
+	}
+	if noted.Notes != wantNotes || noted.Quadrant != "Urgent, not important" {
+		t.Fatalf("add_notes returned notes %q quadrant %q, want %q in %q", noted.Notes, noted.Quadrant, wantNotes, "Urgent, not important")
+	}
+	// SP's short syntax effects run after the update action, so read again later.
+	time.Sleep(2 * time.Second)
+	if got, err := c.GetTask(context.Background(), created.ID); err != nil || got.Notes != wantNotes || got.Title != title {
+		t.Fatalf("2s after add_notes SP holds title %q notes %q (err %v), want %q and %q", got.Title, got.Notes, err, title, wantNotes)
 	}
 
 	others := []string{}

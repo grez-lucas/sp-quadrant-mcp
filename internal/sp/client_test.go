@@ -270,6 +270,41 @@ func TestCreateTaskSendsAnEmptyTagListRatherThanOmittingIt(t *testing.T) {
 	}
 }
 
+func TestCreateTaskStoresTheNotes(t *testing.T) {
+	fake := sptest.New(t, token)
+	c := newClient(t, fake.URL(), token)
+	const notes = "Ana has the PO number\n\n- [ ] Ask for the invoice\n- [ ] File it"
+
+	created, err := c.CreateTask(context.Background(), tools.NewTask{Title: "Renew domain", ProjectID: "INBOX_PROJECT", Notes: notes})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if created.Notes != notes {
+		t.Fatalf("created notes = %q, want %q", created.Notes, notes)
+	}
+	if stored, _ := fake.Task(created.ID); stored.Notes != notes {
+		t.Fatalf("fake holds notes %q, want %q", stored.Notes, notes)
+	}
+}
+
+func TestUpdateTaskReplacesTheNotesAndLeavesTheRestAlone(t *testing.T) {
+	fake := sptest.New(t, token)
+	id := fake.AddTask(sptest.Task{Title: "t", Notes: "old", TagIDs: []string{"work"}})
+	c := newClient(t, fake.URL(), token)
+
+	got, err := c.UpdateTask(context.Background(), id, tools.TaskChanges{Notes: ptr("old\n\n- [ ] new")})
+	if err != nil {
+		t.Fatalf("UpdateTask notes: %v", err)
+	}
+	want := tools.Task{ID: id, Title: "t", TagIDs: []string{"work"}, ProjectID: "INBOX_PROJECT", Notes: "old\n\n- [ ] new"}
+	if !equalTask(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if stored, _ := fake.Task(id); stored.Notes != "old\n\n- [ ] new" || !slices.Equal(stored.TagIDs, []string{"work"}) {
+		t.Fatalf("fake holds %+v, want the new notes and the tags unchanged", stored)
+	}
+}
+
 func TestGetTaskDecodesASubtask(t *testing.T) {
 	fake := sptest.New(t, token)
 	parent := fake.AddTask(sptest.Task{Title: "parent", TagIDs: []string{"work"}})
@@ -480,5 +515,7 @@ func taskIDs(tasks []tools.Task) []string {
 
 func equalTask(a, b tools.Task) bool {
 	return a.ID == b.ID && a.Title == b.Title && a.Done == b.Done && a.ProjectID == b.ProjectID &&
-		a.ParentID == b.ParentID && slices.Equal(a.TagIDs, b.TagIDs)
+		a.ParentID == b.ParentID && a.Notes == b.Notes && slices.Equal(a.TagIDs, b.TagIDs)
 }
+
+func ptr[T any](v T) *T { return &v }

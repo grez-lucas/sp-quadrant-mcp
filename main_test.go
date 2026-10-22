@@ -102,8 +102,8 @@ func TestWithoutATokenFileTheServerStartsAndEveryToolSaysToEnableTheAPI(t *testi
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	if len(listed.Tools) != 4 {
-		t.Fatalf("server lists %d tools, want 4", len(listed.Tools))
+	if len(listed.Tools) != 5 {
+		t.Fatalf("server lists %d tools, want 5", len(listed.Tools))
 	}
 	for _, c := range []struct {
 		tool string
@@ -113,6 +113,7 @@ func TestWithoutATokenFileTheServerStartsAndEveryToolSaysToEnableTheAPI(t *testi
 		{"create_task", map[string]any{"title": "x", "urgent": true, "important": true}},
 		{"move_task", map[string]any{"task_id": "x", "urgent": true, "important": true}},
 		{"complete_task", map[string]any{"task_id": "x"}},
+		{"add_notes", map[string]any{"task_id": "x", "text": "- [ ] y"}},
 	} {
 		msg, isError := callText(t, session, c.tool, c.args)
 		if !isError {
