@@ -114,6 +114,8 @@ type task struct {
 	ProjectID string   `json:"projectId"`
 	// Absent for a top-level task; null in some older data.
 	ParentID *string `json:"parentId"`
+	// Absent when the task has no notes.
+	Notes string `json:"notes"`
 }
 
 func (t task) toTools() tools.Task {
@@ -123,6 +125,7 @@ func (t task) toTools() tools.Task {
 		Done:      t.IsDone,
 		TagIDs:    t.TagIDs,
 		ProjectID: t.ProjectID,
+		Notes:     t.Notes,
 	}
 	if out.TagIDs == nil {
 		out.TagIDs = []string{}
@@ -177,6 +180,9 @@ func (c *Client) CreateTask(ctx context.Context, nt tools.NewTask) (tools.Task, 
 		"tagIds":              tagIDs,
 		"isIgnoreShortSyntax": true,
 	}
+	if nt.Notes != "" {
+		body["notes"] = nt.Notes
+	}
 	var out task
 	if err := c.do(ctx, http.MethodPost, "/tasks", nil, body, true, &out); err != nil {
 		return tools.Task{}, err
@@ -193,6 +199,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, ch tools.TaskChanges
 	}
 	if ch.Done != nil {
 		body["isDone"] = *ch.Done
+	}
+	if ch.Notes != nil {
+		body["notes"] = *ch.Notes
 	}
 	var out task
 	if err := c.do(ctx, http.MethodPatch, "/tasks/"+url.PathEscape(id), nil, body, true, &out); err != nil {

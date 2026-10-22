@@ -21,7 +21,7 @@ all of it is [ADR-0001](../adr/0001-drive-sp-desktop-through-its-local-rest-api-
 ## Install
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.1
+GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.2.0
 ```
 
 `go install pkg@version` runs outside any main module, so `go.mod`'s `go 1.27.3` line is the only one
@@ -50,9 +50,9 @@ go version -m "$(go env GOPATH)/bin/sp-quadrant-mcp" | head -3
 ```
 
 The first line must end in `go1.27.3` (or later), and the third (`mod`) must show
-`github.com/grez-lucas/sp-quadrant-mcp` at the tag installed (`v0.1.1`); the second (`path`) only names
+`github.com/grez-lucas/sp-quadrant-mcp` at the tag installed (`v0.2.0`); the second (`path`) only names
 the package. A Go older than go1.27.3 on the first line means the binary is v0.1.0, whose `go.mod` named
-go1.27.3 only in a `toolchain` line that `go install` ignores: install v0.1.1 as above.
+go1.27.3 only in a `toolchain` line that `go install` ignores: install v0.2.0 as above.
 
 Check the registration:
 
@@ -92,14 +92,15 @@ stderr, which Claude Code keeps in its MCP server log; the token never appears i
 | `sp-quadrant-mcp found no SP Local REST API token when it started` | The token file was missing or empty when Claude Code started the server. The server reads it only once. | Enable the Local REST API in SP, then restart Claude Code. |
 | `SP rejected the token: it may have been regenerated` | SP answered `401 UNAUTHORIZED`. The token was regenerated (Settings -> Misc -> Access Token) or the profile is new since Claude Code started. | Restart Claude Code so the server re-reads the token file. |
 | `refused: the Eisenhower tags (EM_URGENT and EM_IMPORTANT) do not exist in this sync account yet` | `GET /tags` lacks one or both `EM_*` tags. Nothing was written. | Open SP's Eisenhower board, press "Create tags" once, retry. |
-| `task ... is not a Task: subtasks never appear on the board` | `move_task` or `complete_task` got a subtask's id. Nothing was written. | Use the parent task's id, or change the subtask in SP. |
+| `task ... is not a Task: subtasks never appear on the board` | `move_task`, `complete_task` or `add_notes` got a subtask's id. Nothing was written. | Use the parent task's id, or change the subtask in SP. |
 | `SP has no INBOX_PROJECT project to create the task in` | `GET /projects` lacks SP's default inbox. Nothing was written. | Check the profile in SP; the inbox project should always exist. |
 | `SP created task ... but reads it back in ...`, `SP moved task ... but reads it back in ...` | The write went through but SP holds a different quadrant, for example because SP's data repair stripped tags it does not know. | Check the task on the Eisenhower board; check that both `EM_*` tags exist. |
 | `SP dropped tag(s) ... from task ... during the move` | The move changed tags other than the two `EM_*` tags. | Re-add the listed tags to the task in SP. |
 | `SP did not store task ... as done`, `task ... moved from ... while being completed` | The complete went through but SP holds a different state. | Check the task in SP. |
+| `SP created task ... but reads back notes ...`, `SP was sent the notes of task ... but reads back ...` | The write went through but SP holds different notes, for example because the notes were edited in SP at the same moment. | Check the task's notes in SP. |
 | `SP desktop failed while trying to create the task`, `... move task ...`, `... complete task ...; check SP before retrying, a change may already have been applied` | A write got no answer (SP went away, or took longer than 20 seconds) or a 5xx such as `RENDERER_TIMEOUT` (SP's renderer may still apply it after its 15-second budget) or `INTERNAL_ERROR`. The write may have landed. | Check the task in SP before retrying, so a retried create does not make a duplicate. |
 | `SP created task <id> but did not answer when asked to confirm it; check it in SP before retrying, or a retry may create a duplicate` | `create_task` sent the task and SP accepted it, then the read that confirms it failed (no answer, or any error). The task `<id>` probably exists. | Find task `<id>` in SP and check its quadrant; do not retry the create unless it is missing. |
-| `SP was sent the move of task ...` or `SP was sent the completion of task ... but did not answer when asked to confirm it; check SP before retrying, a change may already have been applied` | `move_task` or `complete_task` sent its change, then the read that confirms it failed. The change may have landed. | Check the task in SP before retrying. |
+| `SP was sent the move of task ...`, `SP was sent the completion of task ...` or `SP was sent the notes of task ... but did not answer when asked to confirm it; check SP before retrying, a change may already have been applied` | `move_task`, `complete_task` or `add_notes` sent its change, then the read that confirms it failed. The change may have landed. | Check the task in SP before retrying; a retried `add_notes` that already landed adds the text twice. |
 | `SP desktop stopped answering while trying to ...; retry once SP responds` | A read before any write (listing tasks, tags or projects, or reading the task to move or complete) got no answer after the health check passed. Nothing was written. | Retry once SP responds. |
 | `could not ...: SP error CODE (HTTP n): message` | Any other SP error, with SP's own code and message, for example `TASK_NOT_FOUND` for an unknown id. | Act on SP's message; for `TASK_NOT_FOUND`, list the tasks again for a current id. |
 
@@ -108,6 +109,10 @@ stderr, which Claude Code keeps in its MCP server log; the token never appears i
 `move_task` reads the task's tags, then writes the full list back, because SP's `tagIds` is a full
 replacement on every write: a tag added to the task in SP between that read and that write is
 overwritten, and the move's read-back check cannot see it because it was never part of the list read.
+
+`add_notes` has the same window: it reads the notes, appends, and writes the whole field back, because
+SP's `notes` is also a full replacement. An edit made to the notes in SP between that read and that
+write is lost.
 
 ## Upgrade the wrapper
 

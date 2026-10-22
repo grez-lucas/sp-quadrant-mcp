@@ -3,6 +3,7 @@
 // constraints of ADR-0001: no quadrant write without both EM_* tags, a Move
 // sends the full tag list with only the quadrant tags changed, every write is
 // read back, and every call starts with a health check that never starts SP.
+// Notes ride along on create and grow through add_notes, read back the same way.
 package tools
 
 import (
@@ -16,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/grez-lucas/sp-quadrant-mcp/internal/notes"
 	"github.com/grez-lucas/sp-quadrant-mcp/internal/quadrant"
 )
 
@@ -40,6 +42,7 @@ const (
 type TaskView struct {
 	ID        string `json:"id" jsonschema:"SP's task id, used by move_task and complete_task."`
 	Title     string `json:"title" jsonschema:"The task title."`
+	Notes     string `json:"notes,omitempty" jsonschema:"The task's notes, in markdown; a checklist is \"- [ ] \" items. Omitted when the task has none."`
 	Done      bool   `json:"done" jsonschema:"Whether the task is completed. A completed task stays in its quadrant until archived."`
 	Urgent    *bool  `json:"urgent,omitempty" jsonschema:"Whether the task carries the EM_URGENT tag."`
 	Important *bool  `json:"important,omitempty" jsonschema:"Whether the task carries the EM_IMPORTANT tag."`
@@ -63,6 +66,13 @@ type CreateTaskInput struct {
 	Title     string `json:"title" jsonschema:"The task title, stored literally (no short syntax). Must not be blank."`
 	Urgent    bool   `json:"urgent" jsonschema:"Whether the task is urgent."`
 	Important bool   `json:"important" jsonschema:"Whether the task is important."`
+	Notes     string `json:"notes,omitempty" jsonschema:"Optional notes, in markdown, stored literally: context that does not fit the title, and a checklist as \"- [ ] \" items, one per line."`
+}
+
+// AddNotesInput is add_notes' input.
+type AddNotesInput struct {
+	TaskID string `json:"task_id" jsonschema:"The id of the task, as list_tasks returns it."`
+	Text   string `json:"text" jsonschema:"Markdown to add after the task's notes: a paragraph, or \"- [ ] \" checklist items, one per line. Items that follow a list continue it. Must not be blank."`
 }
 
 // MoveTaskInput is move_task's input.
@@ -77,20 +87,21 @@ type CompleteTaskInput struct {
 	TaskID string `json:"task_id" jsonschema:"The id of the task to complete, as list_tasks returns it."`
 }
 
-// Register adds list_tasks, create_task, move_task and complete_task to server.
+// Register adds list_tasks, create_task, move_task, complete_task and add_notes
+// to server.
 func Register(server *mcp.Server, desktop Desktop, logger *slog.Logger) {
 	h := &handlers{desktop: desktop}
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_tasks",
 		Description: "List the Tasks on Super Productivity's Eisenhower board with their quadrant " +
-			"(urgent, important, and the panel name). Subtasks and archived tasks are never listed; " +
+			"(urgent, important, and the panel name) and notes. Subtasks and archived tasks are never listed; " +
 			"completed tasks only with include_done.",
 	}, logged(logger, "list_tasks", h.listTasks))
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "create_task",
 		Description: "Create a Task in Super Productivity's inbox, in the quadrant given by urgent and important " +
-			"(both false is the \"Neither\" quadrant). The title is stored literally. Refused until the Eisenhower " +
-			"tags exist in the sync account. Returns the task as SP stored it.",
+			"(both false is the \"Neither\" quadrant), with optional markdown notes. The title and notes are stored " +
+			"literally. Refused until the Eisenhower tags exist in the sync account. Returns the task as SP stored it.",
 	}, logged(logger, "create_task", h.createTask))
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "move_task",
@@ -102,6 +113,12 @@ func Register(server *mcp.Server, desktop Desktop, logger *slog.Logger) {
 		Description: "Mark a Task done. It stays in its quadrant until archived. Refused for subtasks. " +
 			"Returns the task as SP stored it.",
 	}, logged(logger, "complete_task", h.completeTask))
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "add_notes",
+		Description: "Add markdown after a Task's notes, keeping what is there: context, or \"- [ ] \" checklist items. " +
+			"Checklist items that follow a list continue it; anything else starts a new paragraph. " +
+			"Refused for subtasks. Returns the task as SP stored it.",
+	}, logged(logger, "add_notes", h.addNotes))
 }
 
 // logged adapts fn to the SDK's typed handler and logs each call's outcome.
@@ -155,6 +172,7 @@ func (h *handlers) createTask(ctx context.Context, in CreateTaskInput) (TaskView
 		return TaskView{}, errors.New("title must not be blank")
 	}
 	want := quadrant.Quadrant{Urgent: in.Urgent, Important: in.Important}
+	wantNotes := notes.Append("", in.Notes)
 	if err := h.ready(ctx); err != nil {
 		return TaskView{}, err
 	}
@@ -168,7 +186,7 @@ func (h *handlers) createTask(ctx context.Context, in CreateTaskInput) (TaskView
 	if !slices.ContainsFunc(projects, func(p Project) bool { return p.ID == InboxProjectID }) {
 		return TaskView{}, fmt.Errorf("SP has no %s project to create the task in", InboxProjectID)
 	}
-	created, err := h.desktop.CreateTask(ctx, NewTask{Title: title, ProjectID: InboxProjectID, TagIDs: want.TagIDs()})
+	created, err := h.desktop.CreateTask(ctx, NewTask{Title: title, ProjectID: InboxProjectID, TagIDs: want.TagIDs(), Notes: wantNotes})
 	if err != nil {
 		return TaskView{}, explainWrite("create the task", err)
 	}
@@ -180,6 +198,10 @@ func (h *handlers) createTask(ctx context.Context, in CreateTaskInput) (TaskView
 	if q := quadrant.Of(got.TagIDs); q != want {
 		return TaskView{}, fmt.Errorf("SP created task %s but reads it back in %q, not %q; check it on the Eisenhower board",
 			got.ID, q.Name(), want.Name())
+	}
+	if got.Notes != wantNotes {
+		return TaskView{}, fmt.Errorf("SP created task %s but reads back notes %q, not %q; check it in SP",
+			got.ID, got.Notes, wantNotes)
 	}
 	return view(got, true), nil
 }
@@ -246,6 +268,39 @@ func (h *handlers) completeTask(ctx context.Context, in CompleteTaskInput) (Task
 	if was, is := quadrant.Of(before.TagIDs), quadrant.Of(got.TagIDs); was != is {
 		return TaskView{}, fmt.Errorf("task %s moved from %q to %q while being completed; check it on the Eisenhower board",
 			got.ID, was.Name(), is.Name())
+	}
+	return view(got, exist), nil
+}
+
+func (h *handlers) addNotes(ctx context.Context, in AddNotesInput) (TaskView, error) {
+	if in.TaskID == "" {
+		return TaskView{}, errors.New("task_id must not be empty")
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return TaskView{}, errors.New("text must not be blank")
+	}
+	if err := h.ready(ctx); err != nil {
+		return TaskView{}, err
+	}
+	exist, err := h.quadrantTagsExist(ctx)
+	if err != nil {
+		return TaskView{}, err
+	}
+	before, err := h.topLevelTask(ctx, in.TaskID)
+	if err != nil {
+		return TaskView{}, err
+	}
+	want := notes.Append(before.Notes, in.Text)
+	if _, err := h.desktop.UpdateTask(ctx, before.ID, TaskChanges{Notes: &want}); err != nil {
+		return TaskView{}, explainWrite(fmt.Sprintf("add notes to task %s", before.ID), err)
+	}
+	got, err := h.desktop.GetTask(ctx, before.ID)
+	if err != nil {
+		return TaskView{}, unconfirmed("notes", before.ID, err)
+	}
+	if got.Notes != want {
+		return TaskView{}, fmt.Errorf("SP was sent the notes of task %s but reads back %q, not %q; check it in SP",
+			got.ID, got.Notes, want)
 	}
 	return view(got, exist), nil
 }
@@ -342,7 +397,7 @@ func explainStep(step string, err error, write bool) error {
 }
 
 func view(t Task, withQuadrant bool) TaskView {
-	v := TaskView{ID: t.ID, Title: t.Title, Done: t.Done}
+	v := TaskView{ID: t.ID, Title: t.Title, Notes: t.Notes, Done: t.Done}
 	if withQuadrant {
 		q := quadrant.Of(t.TagIDs)
 		v.Urgent, v.Important, v.Quadrant = &q.Urgent, &q.Important, q.Name()

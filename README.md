@@ -1,7 +1,7 @@
 # sp-quadrant-mcp
 
 An MCP server that lets Claude Code list, create, move and complete Tasks on Super Productivity's
-Eisenhower board, through SP desktop's Local REST API on `127.0.0.1:3876`. Changes go through SP's
+Eisenhower board, and write their notes and checklists, through SP desktop's Local REST API on `127.0.0.1:3876`. Changes go through SP's
 normal op-log, so they reach SuperSync and the iPhone like any edit made in the app.
 
 The decision is [ADR-0001](docs/adr/0001-drive-sp-desktop-through-its-local-rest-api-with-a-wrapper-we-own.md),
@@ -19,10 +19,14 @@ A quadrant is two booleans, `urgent` (the task carries `EM_URGENT`) and `importa
 
 | Tool | Input | Does |
 | --- | --- | --- |
-| `list_tasks` | `query?: string`, `include_done?: bool` | Lists top-level, unarchived Tasks as `{id, title, done, urgent, important, quadrant}`. Subtasks are dropped. Without the `EM_*` tags it still lists, without the quadrant fields, and adds a `note` saying to press "Create tags". |
-| `create_task` | `title: string`, `urgent: bool`, `important: bool` | Creates the Task in `INBOX_PROJECT` with the title stored literally (`isIgnoreShortSyntax`), then reads it back. |
+| `list_tasks` | `query?: string`, `include_done?: bool` | Lists top-level, unarchived Tasks as `{id, title, notes, done, urgent, important, quadrant}`; `notes` is omitted when empty. Subtasks are dropped. Without the `EM_*` tags it still lists, without the quadrant fields, and adds a `note` saying to press "Create tags". |
+| `create_task` | `title: string`, `urgent: bool`, `important: bool`, `notes?: string` | Creates the Task in `INBOX_PROJECT` with the title stored literally (`isIgnoreShortSyntax`) and the markdown notes, minus surrounding blank lines, then reads it back and checks the quadrant and the notes. |
 | `move_task` | `task_id: string`, `urgent: bool`, `important: bool` | Changes only the two `EM_*` tags and sends the full tag list, then reads it back and checks the quadrant and every other tag. |
 | `complete_task` | `task_id: string` | Marks the Task done, then reads it back and checks it is done in the same quadrant. Works without the `EM_*` tags. |
+| `add_notes` | `task_id: string`, `text: string` | Appends markdown to the Task's notes and sends the whole field, then reads it back and checks it. A list item (`- [ ] `, `- `, `1. `) right after a list item continues the list; anything else starts a new paragraph. Works without the `EM_*` tags. |
+
+A checklist is `- [ ] ` items in the notes, not subtasks: subtasks never appear on the board and
+would cost one write per item.
 
 What every call enforces (ADR-0001):
 
@@ -30,7 +34,7 @@ What every call enforces (ADR-0001):
 - `create_task` and `move_task` refuse to write unless `GET /tags` lists both `EM_URGENT` and
   `EM_IMPORTANT`, and say to press "Create tags" on SP's Eisenhower board. SP itself accepts unknown
   tag ids, so this refusal is the only thing that stops a misplaced task.
-- `move_task` and `complete_task` refuse subtasks.
+- `move_task`, `complete_task` and `add_notes` refuse subtasks.
 - After every write it reads the task back and fails if SP holds something other than what was asked.
 
 The token is read once at startup from SP's own `local-rest-api-token` file under
@@ -41,14 +45,14 @@ through a proxy. Logs go to stderr; stdout is the MCP protocol.
 ## Install
 
 ```sh
-GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.1.1
+GOTOOLCHAIN=auto go install github.com/grez-lucas/sp-quadrant-mcp@v0.2.0
 ```
 
 `go install pkg@version` runs outside any main module, so `go.mod`'s `go 1.27.3` line is the only one
 it honours. Under `GOTOOLCHAIN=auto` an older local Go switches to go1.27.3 for the build; under
 `GOTOOLCHAIN=local` it refuses with `requires go >= 1.27.3` instead of building a binary that still has
 GO-2026-6617, GO-2026-6613 and GO-2026-6612. v0.1.0 named go1.27.3 only in a `toolchain` line, which
-`go install` ignores, so a v0.1.0 binary may have been built with an older Go: install v0.1.1.
+`go install` ignores, so a v0.1.0 binary may have been built with an older Go: install v0.2.0.
 
 ## Register with Claude Code
 
@@ -109,7 +113,8 @@ its own task before `move_task`, and logs whether that branch ran.
 
 - `main.go`: wiring only (token path, SP client, tool registration, stdio).
 - `internal/quadrant`: the domain. Quadrant, panel names, and Move as tag-set math.
-- `internal/tools`: the four MCP tools over the `Desktop` port.
+- `internal/notes`: the domain of Notes. How text is appended to a task's markdown notes.
+- `internal/tools`: the five MCP tools over the `Desktop` port.
 - `internal/sp`: the Local REST API adapter implementing `Desktop`.
 - `internal/token`: reads the token file.
 - `internal/sptest`: the fake SP used by the tests.
